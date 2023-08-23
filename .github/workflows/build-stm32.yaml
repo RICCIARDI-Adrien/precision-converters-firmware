@@ -1,0 +1,78 @@
+name: STM32
+on:
+  - push
+  - workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project:
+          - ad7134_iio
+    env:
+      CUBE_MX_VERSION: 6-9-1
+      CUBE_L5_VERSION: 1.5.0
+      CUBE_IDE_VERSION: 1.13.1_17479_20230728_0839
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Install needed packages
+        run: |
+          # Install a virtual X display and the required libraries for CubeMX because CubeMX needs a fake X11 server to run
+          sudo apt update
+          sudo apt install libgtk3.0-cil libxtst-dev xvfb
+
+      - name: Install STM32 Cube MX (the code generator)
+        run: |
+          wget --no-verbose https://github.com/RICCIARDI-Adrien/precision-converters-firmware/releases/download/binary_dependencies/en.stm32cubemx-lin-v${{ env.CUBE_MX_VERSION }}.zip
+          unzip en.stm32cubemx-lin-v${{ env.CUBE_MX_VERSION }}.zip
+          # Create the automated installation file
+          echo '<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+                <AutomatedInstallation langpack="eng">
+                    <com.st.microxplorer.install.MXHTMLHelloPanel id="readme"/>
+                    <com.st.microxplorer.install.MXLicensePanel id="licence.panel"/>
+                    <com.st.microxplorer.install.MXAnalyticsPanel id="analytics.panel"/>
+                    <com.st.microxplorer.install.MXTargetPanel id="target.panel">
+                        <installpath>/home/runner/STM32CubeMX</installpath>
+                    </com.st.microxplorer.install.MXTargetPanel>
+                    <com.st.microxplorer.install.MXShortcutPanel id="shortcut.panel"/>
+                    <com.st.microxplorer.install.MXInstallPanel id="install.panel"/>
+                    <com.st.microxplorer.install.MXFinishPanel id="finish.panel"/>
+                </AutomatedInstallation>' > auto-install.xml
+          chmod +x SetupSTM32CubeMX-*
+          ./SetupSTM32CubeMX-* auto-install.xml
+
+      # - name: Install STM32 Cube IDE (the toolchain)
+      #   run: |
+      #     wget --no-verbose https://github.com/RICCIARDI-Adrien/precision-converters-firmware/releases/download/binary_dependencies/en.st-stm32cubeide_${{ env.CUBE_IDE_VERSION }}_amd64.deb_bundle.sh.zip
+      #     unzip en.st-stm32cubeide_${{ env.CUBE_IDE_VERSION }}_amd64.deb_bundle.sh.zip
+      #     chmod +x st-stm32cubeide_${{ env.CUBE_IDE_VERSION }}_amd64.deb_bundle.sh
+      #     ./st-stm32cubeide_${{ env.CUBE_IDE_VERSION }}_amd64.deb_bundle.sh --target stm32_ide_installer --noexec
+      #     sudo LICENSE_ALREADY_ACCEPTED=1 apt install -y ./stm32_ide_installer/*.deb
+
+      - name: Install the support packages for the STM32 chip
+        run: |
+          mkdir -p /home/runner/STM32Cube/Repository
+          cd /home/runner/STM32Cube/Repository && git clone --depth 1 -b v${{ env.CUBE_L5_VERSION }} https://github.com/STMicroelectronics/STM32CubeL5
+
+      - name: Generate STM32 code
+        working-directory: projects/${{ matrix.project }}
+        run: |
+          # Create the script file to feed CubeMX with, see ST document UM1718 for commands list
+          echo "config load $(realpath STM32/${{ matrix.project }}.ioc)
+                project toolchain STM32CubeIDE
+                project generate
+                exit" > generate.txt
+          # CubeMX needs a fake X11 server (even in "command line" mode)
+          # It also seems to be unable to find a non-absolute path
+          xvfb-run /home/runner/STM32CubeMX/STM32CubeMX -q $(realpath generate.txt)
+
+      - name: Build
+        uses: xanderhendriks/action-build-stm32cubeide@v10.0
+        with:
+          project-path: 'projects/${{ matrix.project }}/STM32'
+          project-target: '${{ matrix.project }}'
